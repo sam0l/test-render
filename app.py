@@ -1,64 +1,78 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, render_template
 import psycopg2
 from datetime import datetime
 import os
+from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
+socketio = SocketIO(app)
 
-# Database connection (Render provides a connection URL)
+# Database connection
 db_conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 
-# Directory for images
+# Image storage
 IMAGE_DIR = "static/images"
 os.makedirs(IMAGE_DIR, exist_ok=True)
-
-@app.route('/upload', methods=['POST'])
-def upload_data():
-    data = request.get_json()
-    gps = data.get('gps', {})
-    imu = data.get('imu', {})
-    image = data.get('image')  # Base64-encoded
-    detections = data.get('detections', [])
-
-    # Insert GPS and IMU into PostgreSQL
-    cursor = db_conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO vehicle_logs (timestamp, lat, lon, accel_x, accel_y, accel_z)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        """,
-        (datetime.now(), gps.get('lat'), gps.get('lon'), imu.get('accel_x'), imu.get('accel_y'), imu.get('accel_z'))
-    )
-    db_conn.commit()
-
-    # Save image locally
-    image_key = f"{datetime.now().isoformat()}.jpg"
-    with open(os.path.join(IMAGE_DIR, image_key), "wb") as f:
-        f.write(bytes.fromhex(image))  # Assuming hex-encoded; adjust if base64
-
-    # Store detection metadata
-    for detection in detections:
-        cursor.execute(
-            """
-            INSERT INTO detections (timestamp, image_key, sign_type, confidence)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (datetime.now(), image_key, detection['sign_type'], detection['confidence'])
-        )
-    db_conn.commit()
-    cursor.close()
-
-    return jsonify({"status": "success"}), 200
 
 @app.route('/')
 def dashboard():
     cursor = db_conn.cursor()
-    cursor.execute("SELECT timestamp, lat, lon, accel_x, accel_y, accel_z FROM vehicle_logs ORDER BY timestamp DESC LIMIT 10")
-    logs = cursor.fetchall()
-    cursor.execute("SELECT timestamp, image_key, sign_type, confidence FROM detections ORDER BY timestamp DESC LIMIT 5")
+    cursor.execute("SELECT timestamp, image_key, sign_type, confidence, lat, lon, speed FROM detections ORDER BY timestamp DESC LIMIT 5")
     detections = cursor.fetchall()
     cursor.close()
-    return render_template('dashboard.html', logs=logs, detections=detections)
+    return render_template('dashboard.html', detections=detections)
+
+@socketio.on('connect')
+def handle_connect():
+    print("Client connected")
+
+@app.route('/update', methods=['POST'])
+def update_tracking():
+    data = request.get_json()
+    gps = data.get('gps', {})
+    imu = data.get('imu', {})
+    speed = data.get('speed', 0.0)
+
+    # Emit real-time data to connected clients
+    socketio.emit('tracking_update', {
+        'lat': gps.get('lat'),
+        'lon': gps.get('lon'),
+        'speed': speed,
+        'accel_x': imu.get('accel_x'),
+        'accel_y': imu.get('accel_y'),
+        'accel_z': imu.get('accel_z')
+    })
+    return {"status": "success"}, 200
+
+@app.route('/detection', methods=['POST'])
+def handle_detection():
+    data = request.get_json()
+    timestamp = data.get('timestamp')
+    gps = data.get('gps', {})
+    speed = data.get('speed', 0.0)
+    image = data.get('image')
+    detections = data.get('detections', [])
+
+    # Save image
+    image_key = f"{timestamp}.jpg"
+    with open(os.path.join(IMAGE_DIR, image_key), "wb") as f:
+        f.write(bytes.fromhex(image))
+
+    # Store detection in database
+    cursor = db_conn.cursor()
+    for detection in detections:
+        cursor.execute(
+            """
+            INSERT INTO detections (timestamp, image_key, sign_type, confidence, lat, lon, speed)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (timestamp, image_key, detection['sign_type'], detection['confidence'],
+             gps.get('lat'), gps.get('lon'), speed)
+        )
+    db_conn.commit()
+    cursor.close()
+
+    return {"status": "success"}, 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    socketio.run(app, host='0.0.0.0', port=5000)

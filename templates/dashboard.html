@@ -1,53 +1,86 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Vehicle Data Dashboard</title>
+    <title>Vehicle Tracking Dashboard</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
     <div class="container">
-        <h1>Vehicle Data Dashboard</h1>
+        <h1>Vehicle Tracking Dashboard</h1>
 
-        <!-- GPS Map -->
+        <!-- Live Map -->
         <div id="map" style="height: 400px;"></div>
-        <script>
-            var map = L.map('map').setView([{% if logs %}{{ logs[0][1] }}, {{ logs[0][2] }}{% else %}0, 0{% endif %}], 13);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-            {% for log in logs %}
-                L.marker([{{ log[1] }}, {{ log[2] }}]).addTo(map);
-            {% endfor %}
-        </script>
+
+        <!-- Speed Display -->
+        <h2>Speed: <span id="speed">0</span> km/h</h2>
 
         <!-- IMU Graph -->
         <canvas id="imuChart" width="400" height="200"></canvas>
-        <script>
-            var ctx = document.getElementById('imuChart').getContext('2d');
-            var imuChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [{% for log in logs %}'{{ log[0] }}',{% endfor %}],
-                    datasets: [
-                        { label: 'Accel X', data: [{% for log in logs %}{{ log[3] }},{% endfor %}], borderColor: 'red' },
-                        { label: 'Accel Y', data: [{% for log in logs %}{{ log[4] }},{% endfor %}], borderColor: 'green' },
-                        { label: 'Accel Z', data: [{% for log in logs %}{{ log[5] }},{% endfor %}], borderColor: 'blue' }
-                    ]
-                }
-            });
-        </script>
 
         <!-- Detections -->
-        <h2>Recent Detections</h2>
-        <div class="row">
+        <h2>Traffic Sign Detections</h2>
+        <div class="row" id="detections">
             {% for detection in detections %}
-                <div class="col-md-4">
+                <div class="col-md-4 detection-item">
                     <img src="/static/images/{{ detection[1] }}" class="img-fluid" alt="{{ detection[2] }}">
-                    <p>{{ detection[2] }} (Confidence: {{ detection[3] }})</p>
+                    <p>{{ detection[2] }} (Confidence: {{ detection[3] }})<br>
+                    {{ detection[0] }}<br>
+                    Lat: {{ detection[4] }}, Lon: {{ detection[5] }}<br>
+                    Speed: {{ detection[6] }} km/h</p>
                 </div>
             {% endfor %}
         </div>
     </div>
+
+    <script>
+        // Map setup
+        var map = L.map('map').setView([0, 0], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        var marker = L.marker([0, 0]).addTo(map);
+
+        // IMU Chart setup
+        var ctx = document.getElementById('imuChart').getContext('2d');
+        var imuChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Accel X', data: [], borderColor: 'red', fill: false },
+                    { label: 'Accel Y', data: [], borderColor: 'green', fill: false },
+                    { label: 'Accel Z', data: [], borderColor: 'blue', fill: false }
+                ]
+            },
+            options: { scales: { x: { type: 'time' } } }
+        });
+
+        // WebSocket connection
+        var socket = io.connect('https://your-app-name.onrender.com');
+        socket.on('tracking_update', function(data) {
+            // Update map position
+            if (data.lat && data.lon) {
+                marker.setLatLng([data.lat, data.lon]);
+                map.setView([data.lat, data.lon], 13);
+            }
+
+            // Update speed
+            document.getElementById('speed').textContent = data.speed.toFixed(2);
+
+            // Update IMU chart
+            var now = new Date();
+            imuChart.data.labels.push(now);
+            imuChart.data.datasets[0].data.push(data.accel_x || 0);
+            imuChart.data.datasets[1].data.push(data.accel_y || 0);
+            imuChart.data.datasets[2].data.push(data.accel_z || 0);
+            if (imuChart.data.labels.length > 20) {
+                imuChart.data.labels.shift();
+                imuChart.data.datasets.forEach(dataset => dataset.data.shift());
+            }
+            imuChart.update();
+        });
+    </script>
 </body>
 </html>
