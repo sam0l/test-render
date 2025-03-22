@@ -1,86 +1,59 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Vehicle Tracking Dashboard</title>
+    <title>Vehicle Tracking</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
     <div class="container">
-        <h1>Vehicle Tracking Dashboard</h1>
+        <h1>Vehicle Tracking</h1>
 
         <!-- Live Map -->
         <div id="map" style="height: 400px;"></div>
 
-        <!-- Speed Display -->
-        <h2>Speed: <span id="speed">0</span> km/h</h2>
-
-        <!-- IMU Graph -->
-        <canvas id="imuChart" width="400" height="200"></canvas>
-
-        <!-- Detections -->
-        <h2>Traffic Sign Detections</h2>
-        <div class="row" id="detections">
-            {% for detection in detections %}
-                <div class="col-md-4 detection-item">
-                    <img src="/static/images/{{ detection[1] }}" class="img-fluid" alt="{{ detection[2] }}">
-                    <p>{{ detection[2] }} (Confidence: {{ detection[3] }})<br>
-                    {{ detection[0] }}<br>
-                    Lat: {{ detection[4] }}, Lon: {{ detection[5] }}<br>
-                    Speed: {{ detection[6] }} km/h</p>
-                </div>
-            {% endfor %}
+        <!-- Latest Frame -->
+        <h2>Latest Camera Frame</h2>
+        <div id="latest-frame">
+            {% if latest_frame %}
+                <img src="/static/images/{{ latest_frame[1] }}" class="img-fluid" alt="Latest Frame">
+                <p>Timestamp: {{ latest_frame[0] }}<br>
+                   Lat: {{ latest_frame[2] }}, Lon: {{ latest_frame[3] }}</p>
+            {% else %}
+                <p>No frames yet</p>
+            {% endif %}
         </div>
     </div>
 
     <script>
-        // Map setup
+        // Initialize map
         var map = L.map('map').setView([0, 0], 13);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
         var marker = L.marker([0, 0]).addTo(map);
 
-        // IMU Chart setup
-        var ctx = document.getElementById('imuChart').getContext('2d');
-        var imuChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'Accel X', data: [], borderColor: 'red', fill: false },
-                    { label: 'Accel Y', data: [], borderColor: 'green', fill: false },
-                    { label: 'Accel Z', data: [], borderColor: 'blue', fill: false }
-                ]
-            },
-            options: { scales: { x: { type: 'time' } } }
-        });
+        function fetchLatest() {
+            fetch('https://test-render-uvos.onrender.com/latest')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Latest data:', data);  // Debug log
+                    if (data.gps && data.gps.lat && data.gps.lon) {
+                        marker.setLatLng([data.gps.lat, data.gps.lon]);
+                        map.setView([data.gps.lat, data.gps.lon], 13);
+                    }
+                    if (data.image_key) {
+                        document.getElementById('latest-frame').innerHTML = `
+                            <img src="/static/images/${data.image_key}" class="img-fluid" alt="Latest Frame">
+                            <p>Timestamp: ${new Date().toISOString()}</p>
+                        `;
+                    }
+                })
+                .catch(error => console.log('Fetch error:', error));
+        }
 
-        // WebSocket connection
-        var socket = io.connect('https://test-render-uvos.onrender.com/');
-        socket.on('tracking_update', function(data) {
-            // Update map position
-            if (data.lat && data.lon) {
-                marker.setLatLng([data.lat, data.lon]);
-                map.setView([data.lat, data.lon], 13);
-            }
-
-            // Update speed
-            document.getElementById('speed').textContent = data.speed.toFixed(2);
-
-            // Update IMU chart
-            var now = new Date();
-            imuChart.data.labels.push(now);
-            imuChart.data.datasets[0].data.push(data.accel_x || 0);
-            imuChart.data.datasets[1].data.push(data.accel_y || 0);
-            imuChart.data.datasets[2].data.push(data.accel_z || 0);
-            if (imuChart.data.labels.length > 20) {
-                imuChart.data.labels.shift();
-                imuChart.data.datasets.forEach(dataset => dataset.data.shift());
-            }
-            imuChart.update();
-        });
+        // Initial fetch and poll every 5 seconds
+        fetchLatest();
+        setInterval(fetchLatest, 5000);
     </script>
 </body>
 </html>
