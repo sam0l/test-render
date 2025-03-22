@@ -5,7 +5,8 @@ import os
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-socketio = SocketIO(app)
+# Configure SocketIO for Render (no async mode, use eventlet if needed)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Database connection
 db_conn = psycopg2.connect(os.getenv("DATABASE_URL"))
@@ -53,12 +54,10 @@ def handle_detection():
     image = data.get('image')
     detections = data.get('detections', [])
 
-    # Save image
     image_key = f"{timestamp}.jpg"
     with open(os.path.join(IMAGE_DIR, image_key), "wb") as f:
         f.write(bytes.fromhex(image))
 
-    # Store detection in database
     cursor = db_conn.cursor()
     for detection in detections:
         cursor.execute(
@@ -71,8 +70,7 @@ def handle_detection():
         )
     db_conn.commit()
     cursor.close()
-
     return {"status": "success"}, 200
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000)
+    socketio.run(app, host='0.0.0.0', port=int(os.getenv("PORT", 5000)))

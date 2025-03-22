@@ -58,7 +58,7 @@
         });
 
         // WebSocket connection
-        var socket = io.connect('https://your-app-name.onrender.com');
+        var socket = io.connect('https://test-render-uvos.onrender.com/');
         socket.on('tracking_update', function(data) {
             // Update map position
             if (data.lat && data.lon) {
