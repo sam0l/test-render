@@ -3,11 +3,25 @@ import psycopg2
 from datetime import datetime
 import os
 import time
+import logging
 
 app = Flask(__name__)
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Database connection
-db_conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        return conn
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        raise
+
+# Initialize connection
+db_conn = get_db_connection()
 IMAGE_DIR = "static/images"
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
@@ -23,11 +37,19 @@ STOP_DURATION = 30   # seconds
 
 @app.route('/')
 def dashboard():
-    cursor = db_conn.cursor()
-    cursor.execute("SELECT timestamp, image_key, speed, lat, lon, violation FROM detections ORDER BY timestamp DESC")
-    detections = cursor.fetchall()
-    cursor.close()
-    return render_template('dashboard.html', drives=drives, detections=detections)
+    try:
+        cursor = db_conn.cursor()
+        cursor.execute("SELECT timestamp, image_key, speed, lat, lon, violation FROM detections ORDER BY timestamp DESC")
+        detections = cursor.fetchall()
+        cursor.close()
+        return render_template('dashboard.html', drives=drives, detections=detections)
+    except psycopg2.Error as e:
+        logger.error(f"Database error in dashboard: {e}")
+        db_conn.rollback()  # Reset transaction state
+        return "Database error occurred", 500
+    except Exception as e:
+        logger.error(f"Unexpected error in dashboard: {e}")
+        return "Internal server error", 500
 
 @app.route('/update', methods=['POST'])
 def update_tracking():
@@ -68,27 +90,40 @@ def update_tracking():
 
     # Handle traffic sign detections
     if frame and detections:
-        timestamp = datetime.now().isoformat()
-        image_key = f"{timestamp}.jpg"
-        with open(os.path.join(IMAGE_DIR, image_key), "wb") as f:
-            f.write(bytes.fromhex(frame))
-        cursor = db_conn.cursor()
-        for det in detections:
-            is_speed_limit = 'speed' in det.get('sign_type', '').lower()
-            limit = float(''.join(filter(str.isdigit, det.get('sign_type', '0'))) or 0)
-            violation = is_speed_limit and speed > limit
-            cursor.execute(
-                "INSERT INTO detections (timestamp, image_key, speed, lat, lon, violation) VALUES (%s, %s, %s, %s, %s, %s)",
-                (timestamp, image_key, speed, gps.get('lat'), gps.get('lon'), violation)
-            )
-        db_conn.commit()
-        cursor.close()
+        try:
+            cursor = db_conn.cursor()
+            timestamp = datetime.now().isoformat()
+            image_key = f"{timestamp}.jpg"
+            with open(os.path.join(IMAGE_DIR, image_key), "wb") as f:
+                f.write(bytes.fromhex(frame))
+            for det in detections:
+                is_speed_limit = 'speed' in det.get('sign_type', '').lower()
+                limit = float(''.join(filter(str.isdigit, det.get('sign_type', '0'))) or 0)
+                violation = is_speed_limit and speed > limit
+                cursor.execute(
+                    "INSERT INTO detections (timestamp, image_key, speed, lat, lon, violation) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (timestamp, image_key, speed, gps.get('lat'), gps.get('lon'), violation)
+                )
+            db_conn.commit()
+            cursor.close()
+        except psycopg2.Error as e:
+            logger.error(f"Database error in update: {e}")
+            db_conn.rollback()  # Reset transaction state
+            return {"status": "error", "message": str(e)}, 500
+        except Exception as e:
+            logger.error(f"Unexpected error in update: {e}")
+            db_conn.rollback()
+            return {"status": "error", "message": "Internal server error"}, 500
 
     return {"status": "success"}, 200
 
 @app.route('/latest', methods=['GET'])
 def get_latest():
-    return jsonify({'tracking': latest_tracking, 'path': current_path, 'drives': drives})
+    try:
+        return jsonify({'tracking': latest_tracking, 'path': current_path, 'drives': drives})
+    except Exception as e:
+        logger.error(f"Error in get_latest: {e}")
+        return {"status": "error", "message": "Internal server error"}, 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
