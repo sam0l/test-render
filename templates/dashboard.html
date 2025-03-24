@@ -9,49 +9,78 @@
 <body>
     <div class="container">
         <h1>Vehicle Tracking</h1>
-
-        <!-- Live Map -->
         <div id="map" style="height: 400px;"></div>
+        <h2>Current Speed: <span id="speed">0.00</span> kph</h2>
 
-        <!-- Latest Frame -->
-        <h2>Latest Camera Frame</h2>
-        <div id="latest-frame">
-            {% if latest_frame %}
-                <img src="/static/images/{{ latest_frame[1] }}" class="img-fluid" alt="Latest Frame">
-                <p>Timestamp: {{ latest_frame[0] }}<br>
-                   Lat: {{ latest_frame[2] }}, Lon: {{ latest_frame[3] }}</p>
-            {% else %}
-                <p>No frames yet</p>
-            {% endif %}
-        </div>
+        <h3>Drives</h3>
+        <table class="table">
+            <thead><tr><th>Start Coords</th><th>End Coords</th><th>Path</th><th>Avg Speed (kph)</th><th>Duration (s)</th></tr></thead>
+            <tbody id="drives">
+                {% for drive in drives %}
+                    <tr>
+                        <td>{{ drive.start_coords }}</td>
+                        <td>{{ drive.end_coords }}</td>
+                        <td><div id="path_{{ loop.index }}" style="height: 100px;"></div></td>
+                        <td>{{ "%.2f"|format(drive.avg_speed) }}</td>
+                        <td>{{ "%.2f"|format(drive.duration) }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h3>Detections</h3>
+        <table class="table">
+            <thead><tr><th>Image</th><th>Speed (kph)</th><th>Coords</th><th>Violation</th></tr></thead>
+            <tbody id="detections">
+                {% for detection in detections %}
+                    <tr>
+                        <td><img src="/static/images/{{ detection[1] }}" class="img-fluid" style="max-width: 100px;"></td>
+                        <td>{{ detection[2] }}</td>
+                        <td>{{ detection[3] }}, {{ detection[4] }}</td>
+                        <td>{{ "Yes" if detection[5] else "No" }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
 
     <script>
-        // Initialize map
         var map = L.map('map').setView([0, 0], 13);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
         var marker = L.marker([0, 0]).addTo(map);
+        var path = L.polyline([], {color: 'blue'}).addTo(map);
 
         function fetchLatest() {
             fetch('https://test-render-uvos.onrender.com/latest')
                 .then(response => response.json())
                 .then(data => {
-                    console.log('Latest data:', data);  // Debug log
-                    if (data.gps && data.gps.lat && data.gps.lon) {
-                        marker.setLatLng([data.gps.lat, data.gps.lon]);
-                        map.setView([data.gps.lat, data.gps.lon], 13);
+                    var gps = data.tracking.gps;
+                    if (gps.lat && gps.lon) {
+                        marker.setLatLng([gps.lat, gps.lon]);
+                        map.setView([gps.lat, gps.lon], 13);
                     }
-                    if (data.image_key) {
-                        document.getElementById('latest-frame').innerHTML = `
-                            <img src="/static/images/${data.image_key}" class="img-fluid" alt="Latest Frame">
-                            <p>Timestamp: ${new Date().toISOString()}</p>
-                        `;
-                    }
+                    document.getElementById('speed').textContent = data.tracking.speed.toFixed(2);
+                    path.setLatLngs(data.path.map(p => [p[0], p[1]]));
+
+                    var drivesBody = document.getElementById('drives');
+                    drivesBody.innerHTML = '';
+                    data.drives.forEach((drive, i) => {
+                        var row = `<tr>
+                            <td>${drive.start_coords}</td>
+                            <td>${drive.end_coords}</td>
+                            <td><div id="path_${i}" style="height: 100px;"></div></td>
+                            <td>${drive.avg_speed.toFixed(2)}</td>
+                            <td>${drive.duration.toFixed(2)}</td>
+                        </tr>`;
+                        drivesBody.innerHTML += row;
+                        var miniMap = L.map(`path_${i}`, {zoomControl: false}).setView(drive.start_coords, 13);
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(miniMap);
+                        L.polyline(drive.path, {color: 'blue'}).addTo(miniMap);
+                    });
                 })
                 .catch(error => console.log('Fetch error:', error));
         }
 
-        // Initial fetch and poll every 5 seconds
         fetchLatest();
         setInterval(fetchLatest, 5000);
     </script>
